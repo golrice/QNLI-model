@@ -1,1 +1,3 @@
-venv/
+resources/glove/
+resources/vector/
+resources/words/
