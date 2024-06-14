@@ -16,13 +16,15 @@ bidirectional = True
 dropout = 0.5
 lr = 0.001
 
-batch_size = 1
-num_epochs = 5
+batch_size = 36
+num_epochs = 50
 
 # 记录正确率
 validate_accuracy = []
-# 损失曲线
-losses = []
+# loss记录
+train_loss = []
+
+logging.info(f"critical constants: batch_size={batch_size}, num_epochs={num_epochs}")
 
 logging.info(f"constants init finished")
 
@@ -66,30 +68,34 @@ import pandas as pd
 
 words_list = np.load(words_path).tolist()
 embedding_matrix = np.load(vector_path)
-dev_data = pd.read_csv(dev_data_path, sep='\t', header=0, on_bad_lines='skip')
-train_data = pd.read_csv(train_data_path, sep='\t', header=0, on_bad_lines='skip')
-# 只取前40条数据
-train_data = train_data[:10]
-dev_data = dev_data[:10]
+# 莫名读取错误 应该是文件问题
+# train_data = pd.read_csv(train_data_path, sep='\t', header=0, on_bad_lines='skip', encoding='utf-8')
+# dev_data = pd.read_csv(dev_data_path, sep='\t', header=0, on_bad_lines='skip', encoding='utf-8')
+
+with open(train_data_path, 'r', encoding='utf-8') as file:
+    train_data = list(map(lambda x: x.strip().split('\t'), file.readlines()))
+    # 将label转换成0/1
+    train_data = [(id, question, answer, np.where(label == 'entailment', 1, 0)) for id, question, answer, label in train_data]
+
+with open(dev_data_path, 'r', encoding='utf-8') as file:
+    dev_data = list(map(lambda x: x.strip().split('\t'), file.readlines()))
+    dev_data = [(id, question, answer, np.where(label == 'entailment', 1, 0)) for id, question, answer, label in dev_data]
+
 max_seq_len = 10
 
-for question in train_data['question']:
-    max_seq_len = max(max_seq_len, len(question.split()))
+for id, question, answer, label in train_data:
+    max_seq_len = max(max_seq_len, len(question.split()), len(answer.split()))
 
-for answer in train_data['sentence']:
-    max_seq_len = max(max_seq_len, len(answer.split()))
-
-# 应该是文件结束符导致句子会长一个词，所以加1
-max_seq_len += 1
+logging.info(f"data loaded, with max_seq_len={max_seq_len}")
 
 ##################################################################################################################################
 from torch.utils.data import Dataset, DataLoader
 import random
 
-def convert_to_index(sentence, words_list):
+def convert_to_index(sentence, words_list, words_set):
     result = []
     for word in sentence.lower().split():
-        if word in words_list:
+        if word in words_set:
             result.append(words_list.index(word))
         else:
             result.append(random.randint(0, len(words_list)-1))
@@ -99,17 +105,16 @@ class SimpleDataset(Dataset):
     def __init__(self, words_list, data):
         self.words_list = words_list
         self.data = data
+        self.words_set = set(words_list)
 
     def __getitem__(self, index):
-        index, question, answer, label = self.data.iloc[index]
+        index, question, answer, label = self.data[index]
         # 转换为index 还需要注意某些词没有对应的index
-        question_index = torch.tensor(convert_to_index(question, self.words_list))
-        answer_index = torch.tensor(convert_to_index(answer, self.words_list))
+        question_index = torch.tensor(convert_to_index(question, self.words_list, self.words_set))
+        answer_index = torch.tensor(convert_to_index(answer, self.words_list, self.words_set))
 
         question_lengths = len(question_index)
         answer_lengths = len(answer_index)
-
-        label = torch.tensor(np.where(label == 'entailment', 1, 0))
 
         # 填充
         padded_question = nn.functional.pad(question_index, (0, max_seq_len - question_lengths), 'constant', 0)
@@ -126,7 +131,7 @@ dev_dataset = SimpleDataset(words_list, dev_data)
 train_data_loader = DataLoader(dev_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
 dev_data_loader = DataLoader(dev_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
 
-logging.info(f"data loaded")
+logging.info(f"data loader init finished")
 
 ##################################################################################################################################
 
@@ -150,11 +155,12 @@ def evaluate_model(model, data_loader):
             correct += (predicted == label).sum().item()
     return 100 * correct / total
 
+logging.info(f"start training")
+
 # 训练模型
 for epoch in range(num_epochs):
     model.train()  # 设置模型为训练模式
     total_loss = 0
-    current_loss = []
     for batch in train_data_loader:
         _, question, answer, label, question_lengths, answer_lengths = batch
         optimizer.zero_grad()  # 清除之前的梯度
@@ -162,10 +168,9 @@ for epoch in range(num_epochs):
         loss = criterion(outputs, label)  # 计算损失
         loss.backward()  # 反向传播
         optimizer.step()  # 更新参数
-        current_loss.append(loss.item())
         total_loss += loss.item()
     print(f'Epoch {epoch+1}, Loss: {total_loss/len(train_data_loader)}')
-    losses.append(current_loss)
+    train_loss.append(total_loss/len(train_data_loader))
     
     # 在验证集上评估模型
     model.eval()  # 设置模型为评估模式
@@ -183,18 +188,14 @@ plt.plot(range(num_epochs), validate_accuracy)
 plt.xlabel('Epochs')
 plt.ylabel('Accuracy')
 plt.title('Validation Accuracy')
-plt.savefig('validation_accuracy.png')
+plt.savefig('validation_accuracy3.png')
 
+# 绘制loss图
 plt.clf()
-
-# 绘制损失图
-for i in range(len(losses)):
-    plt.plot(range(len(losses[i])), losses[i])
-    plt.legend(['Batch '+str(i+1) for i in range(len(losses[i]))])
-
-plt.xlabel('Batches')
+plt.plot(range(num_epochs), train_loss)
+plt.xlabel('Epochs')
 plt.ylabel('Loss')
 plt.title('Training Loss')
-plt.savefig('training_loss.png')
+plt.savefig('train_loss3.png')
 
 logging.info(f"finished")
