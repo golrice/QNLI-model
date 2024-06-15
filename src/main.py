@@ -4,8 +4,14 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 ##################################################################################################################################
 import os
 
-words_path = os.path.join(os.path.dirname(__file__), '..', "resources", "words", "save_words_50d.npy")
-vector_path = os.path.join(os.path.dirname(__file__), '..', "resources", "vector", "save_vector_50d.npy")
+words_path = os.path.join(os.path.dirname(__file__), '..', "resources", "words", "save_words_300d.npy")
+vector_path = os.path.join(os.path.dirname(__file__), '..', "resources", "vector", "save_vector_300d.npy")
+
+accuracy_path = os.path.join(os.path.dirname(__file__), '..', "accuracy300d.png")
+loss_path = os.path.join(os.path.dirname(__file__), '..', "loss300d.png")
+time_train_path = os.path.join(os.path.dirname(__file__), '..', "time_train300d.png")
+time_validate_path = os.path.join(os.path.dirname(__file__), '..', "time_validate300d.png")
+
 train_data_path = os.path.join(os.path.dirname(__file__), '..', "resources", "train_40.tsv")
 dev_data_path = os.path.join(os.path.dirname(__file__), '..', "resources", "dev_40.tsv")
 
@@ -17,12 +23,16 @@ dropout = 0.5
 lr = 0.001
 
 batch_size = 36
-num_epochs = 50
+num_epochs = 10
 
 # 记录正确率
 validate_accuracy = []
 # loss记录
 train_loss = []
+# 训练时间记录
+time_train = []
+# 验证时间记录
+time_validate = []
 
 logging.info(f"critical constants: batch_size={batch_size}, num_epochs={num_epochs}")
 
@@ -142,26 +152,12 @@ optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 logging.info(f"model init finished")
 
 ##################################################################################################################################
-# 定义评估函数
-def evaluate_model(model, data_loader):
-    correct = 0
-    total = 0
-    with torch.no_grad():
-        for batch in data_loader:
-            index, question, answer, label, question_lengths, answer_lengths = batch
-            outputs = model(question, answer, question_lengths, answer_lengths)
-            _, predicted = torch.max(outputs.data, 1)
-            total += label.size(0)
-            correct += (predicted == label).sum().item()
-    return 100 * correct / total
+import time
 
-logging.info(f"start training")
-
-# 训练模型
-for epoch in range(num_epochs):
-    model.train()  # 设置模型为训练模式
+def train_model(model, data_loader, criterion, optimizer):
     total_loss = 0
-    for batch in train_data_loader:
+    start = time.time()
+    for batch in data_loader:
         _, question, answer, label, question_lengths, answer_lengths = batch
         optimizer.zero_grad()  # 清除之前的梯度
         outputs = model(question, answer, question_lengths, answer_lengths)
@@ -169,14 +165,42 @@ for epoch in range(num_epochs):
         loss.backward()  # 反向传播
         optimizer.step()  # 更新参数
         total_loss += loss.item()
-    print(f'Epoch {epoch+1}, Loss: {total_loss/len(train_data_loader)}')
-    train_loss.append(total_loss/len(train_data_loader))
+    end = time.time()
+    time_train.append(end - start)
+    return total_loss / len(data_loader)
+
+# 定义评估函数
+def evaluate_model(model, data_loader):
+    correct = 0
+    total = 0
+    start = time.time()
+    with torch.no_grad():
+        for batch in data_loader:
+            index, question, answer, label, question_lengths, answer_lengths = batch
+            outputs = model(question, answer, question_lengths, answer_lengths)
+            _, predicted = torch.max(outputs.data, 1)
+            total += label.size(0)
+            correct += (predicted == label).sum().item()
+    end = time.time()
+    time_validate.append(end - start)
+    return 100 * correct / total
+
+logging.info(f"start training")
+
+# 训练模型
+for epoch in range(num_epochs):
+    model.train()  # 设置模型为训练模式
+    loss = train_model(model, train_data_loader, criterion, optimizer)  # 训练模型
+    print(f'Epoch {epoch+1}, Loss: {loss}')
+    train_loss.append(loss)
     
     # 在验证集上评估模型
     model.eval()  # 设置模型为评估模式
     validation_accuracy = evaluate_model(model, dev_data_loader)
     validate_accuracy.append(validation_accuracy)
     print(f'Validation Accuracy: {validation_accuracy}')
+
+logging.info(f"training and validation finished")
 
 ##################################################################################################################################
 logging.getLogger().setLevel(logging.CRITICAL)
@@ -188,7 +212,7 @@ plt.plot(range(num_epochs), validate_accuracy)
 plt.xlabel('Epochs')
 plt.ylabel('Accuracy')
 plt.title('Validation Accuracy')
-plt.savefig('validation_accuracy3.png')
+plt.savefig(accuracy_path)
 
 # 绘制loss图
 plt.clf()
@@ -196,6 +220,43 @@ plt.plot(range(num_epochs), train_loss)
 plt.xlabel('Epochs')
 plt.ylabel('Loss')
 plt.title('Training Loss')
-plt.savefig('train_loss3.png')
+plt.savefig(loss_path)
 
-logging.info(f"finished")
+# 绘制训练时间图 标注单位
+plt.clf()
+plt.plot(range(num_epochs), time_train)
+plt.xlabel('Epochs')
+plt.ylabel('Time(s)')
+plt.title('Training Time')
+plt.savefig(time_train_path)
+
+# 绘制验证时间图
+plt.clf()
+plt.plot(range(num_epochs), time_validate)
+plt.xlabel('Epochs')
+plt.ylabel('Time(s)')
+plt.title('Validation Time')
+plt.savefig(time_validate_path)
+
+##################################################################################################################################
+# 保存模型
+torch.save(model.state_dict(), os.path.join(os.path.dirname(__file__), '..', "resources", "model", "save_model.pth"))
+
+# 说明指标
+# 最高的准确率
+max_accuracy = max(validate_accuracy)
+# 最低的loss
+min_loss = min(train_loss)
+# 最长的训练时间
+max_train_time = max(time_train)
+# 最短的训练时间
+min_train_time = min(time_train)
+# 最长的验证时间
+max_validate_time = max(time_validate)
+# 最短的验证时间
+min_validate_time = min(time_validate)
+
+print(f"max_accuracy: {max_accuracy}")
+print(f"min_loss: {min_loss}")
+print(f"max_train_time: {max_train_time}, min_train_time: {min_train_time}")
+print(f"max_validate_time: {max_validate_time}, min_validate_time: {min_validate_time}")

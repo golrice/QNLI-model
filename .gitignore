@@ -1,6 +1,7 @@
 resources/glove/
 resources/vector/
 resources/words/
+resources/model/
 
 test/
 *.png
